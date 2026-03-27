@@ -212,6 +212,23 @@ RCT_EXPORT_METHOD(connect:(NSString *)address
         //centralManager:didDiscoverPeripheral:advertisementData:RSSI:
     }
 }
+
+//disconnect
+RCT_EXPORT_METHOD(disconnect:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+    @try {
+        if(connected){
+            [self.centralManager cancelPeripheralConnection:connected];
+            connected = nil;
+        }
+        resolve(nil);
+    }
+    @catch(NSException *exception){
+        reject([exception name],[exception name],nil);
+    }
+}
+
 //unpair(address)
 
 

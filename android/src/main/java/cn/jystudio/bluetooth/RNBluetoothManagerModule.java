@@ -231,6 +231,20 @@ public class RNBluetoothManagerModule extends ReactContextBaseJavaModule
     }
 
     @ReactMethod
+    public void disconnect(final Promise promise) {
+        try {
+            if (mService != null && mService.getState() != BluetoothService.STATE_NONE) {
+                mService.stop();
+            }
+            mConnectedDeviceName = null;
+            promise.resolve(null);
+        } catch (Exception e) {
+            Log.e(TAG, e.getMessage());
+            promise.reject(e.getMessage());
+        }
+    }
+
+    @ReactMethod
     public void getConnectedDevice(final Promise promise) {
         try {
              BluetoothDevice device = mService.getConnectedDevice();
