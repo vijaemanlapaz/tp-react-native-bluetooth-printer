@@ -14,5 +14,7 @@
 @property RNBluetoothManager *printer;
 @property RCTPromiseRejectBlock pendingReject;
 @property RCTPromiseResolveBlock pendingResolve;
+/** Optional target device address for multi-printer routing */
+@property (nonatomic, strong) NSString *targetAddress;
 -(void) print;
 @end

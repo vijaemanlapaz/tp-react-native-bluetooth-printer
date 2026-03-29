@@ -183,7 +183,21 @@ declare module "tp-react-native-bluetooth-printer" {
     reference?: any[];
     sound?: number | typeof READABLE;
     home?: number | typeof READABLE;
+    /** Optional device address to target a specific connected printer */
+    address?: string;
   };
+
+  /**
+   * Connection event payload emitted for device-specific events.
+   * Events now include `device_address` to identify which printer triggered the event.
+   */
+  export type ConnectionEventPayload = {
+    device_name?: string;
+    device_address?: string;
+  };
+
+  /** Maximum number of simultaneous Bluetooth connections allowed */
+  export const MAX_CONNECTIONS: 7;
 
   export class BluetoothManager {
     static enableBluetooth():
@@ -195,79 +209,179 @@ declare module "tp-react-native-bluetooth-printer" {
     static scanDevices():
       | ScannedBluetoothDevices
       | PromiseLike<ScannedBluetoothDevices>;
-    static connect(address: string): void | PromiseLike<void>;
-    static disconnect(): void | PromiseLike<void>;
-    static getConnectedDevice():
+
+    /**
+     * Connect to a Bluetooth device. Multiple devices can be connected simultaneously
+     * (up to MAX_CONNECTIONS). Resolves with device info including name and address.
+     */
+    static connect(
+      address: string
+    ): ConnectionEventPayload | PromiseLike<ConnectionEventPayload>;
+
+    /**
+     * Disconnect from a specific device by address, or disconnect all devices if
+     * address is null/undefined.
+     */
+    static disconnect(address?: string | null): void | PromiseLike<void>;
+
+    /**
+     * Get all currently connected devices.
+     */
+    static getConnectedDevices():
       | BluetoothDevice[]
       | PromiseLike<BluetoothDevice[]>;
+
     static unpair(address: string): string | PromiseLike<string>;
   }
 
   export class BluetoothEscposPrinter {
-    static printerInit():
-      | void
-      | string
-      | PromiseLike<void>
-      | PromiseLike<string>;
+    /**
+     * Initialize the printer. Optionally target a specific printer by address.
+     */
+    static printerInit(
+      address?: string | null
+    ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Print and feed paper. Optionally target a specific printer by address.
+     */
     static printAndFeed(
-      feed: number
+      feed: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set left space. Optionally target a specific printer by address.
+     */
     static printerLeftSpace(
-      space: number
+      space: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set line space. Optionally target a specific printer by address.
+     */
     static printerLineSpace(
-      space: number
+      space: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set underline mode. Optionally target a specific printer by address.
+     */
     static printerUnderLine(
-      line: number | typeof READABLE
+      line: number | typeof READABLE,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set text alignment. Optionally target a specific printer by address.
+     */
     static printerAlign(
-      space: number | typeof ALIGN
+      align: number | typeof ALIGN,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Print text. Optionally target a specific printer by address.
+     */
     static printText(
       text: string,
-      options?: PrintTextOptions
+      options?: PrintTextOptions,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Print columnar text. Optionally target a specific printer by address.
+     */
     static printColumn(
       columnWidths: number[],
       columnAligns: number[] | (typeof ALIGN)[],
       columnTexts: string[],
-      options?: PrintTextOptions
+      options?: PrintTextOptions,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set device width. Optionally target a specific printer by address
+     * for per-device width tracking.
+     */
     static setWidth(
-      width: number | typeof PAGE_WIDTH
+      width: number | typeof PAGE_WIDTH,
+      address?: string | null
     ): void | PromiseLike<void>;
+
+    /**
+     * Print a picture. Optionally target a specific printer by address.
+     */
     static printPic(
       base64Image: string,
-      options?: PrintPictureOptions
+      options?: PrintPictureOptions,
+      address?: string | null
     ): void | PromiseLike<void>;
+
+    /**
+     * Cut paper. Optionally target a specific printer by address.
+     */
     static cutLine(
-      line: number
+      line: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
-    static selfTest(): void | PromiseLike<void>;
+
+    /**
+     * Self test. Optionally target a specific printer by address.
+     */
+    static selfTest(
+      address?: string | null,
+      callback?: (result: boolean) => void
+    ): void | PromiseLike<void>;
+
+    /**
+     * Rotate 90°. Optionally target a specific printer by address.
+     */
     static rotate(
-      rotate: number | typeof ESC_ROTATION
+      rotate: number | typeof ESC_ROTATION,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Set bold weight. Optionally target a specific printer by address.
+     */
     static setBold(
-      weight: number | typeof ESC_ROTATION
+      weight: number | typeof ESC_ROTATION,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Print QR code. Optionally target a specific printer by address.
+     */
     static printQRCode(
       content: string,
       size: number,
       correctionLevel: number | typeof ERROR_CORRECTION,
-      leftPadding?: number
+      leftPadding?: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
+
+    /**
+     * Print barcode. Optionally target a specific printer by address.
+     */
     static printBarCode(
       content: string,
       barcodeType: number | typeof BARCODETYPE,
       width: number,
       height: number,
       fontType: number | typeof FONTTYPE,
-      fontPosition: number
+      fontPosition: number,
+      address?: string | null
     ): void | string | PromiseLike<void> | PromiseLike<string>;
   }
 
   export class BluetoothTscPrinter {
+    /**
+     * Print a TSC label. The options map now supports an optional `address` field
+     * to target a specific connected printer.
+     */
     static printLabel(
       options: PrintLabelOptions
     ): void | string | PromiseLike<void> | PromiseLike<string>;

@@ -26,10 +26,14 @@ NSInteger now;
 }
 
 RCT_EXPORT_MODULE(BluetoothTscPrinter);
+
 //printLabel(final ReadableMap options, final Promise promise)
 RCT_EXPORT_METHOD(printLabel:(NSDictionary *) options withResolve:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
+    // Extract optional address from options for multi-printer routing
+    NSString *address = [options valueForKey:@"address"];
+
     NSInteger width = [[options valueForKey:@"width"] integerValue];
     NSInteger height = [[options valueForKey:@"height"] integerValue];
     NSInteger gap = [[options valueForKey:@"gap"] integerValue];
@@ -59,7 +63,7 @@ RCT_EXPORT_METHOD(printLabel:(NSDictionary *) options withResolve:(RCTPromiseRes
     if(reference && [reference count] ==2){
         NSInteger x = [[reference objectAtIndex:0] integerValue];
         NSInteger y = [[reference objectAtIndex:1] integerValue];
-        NSLog(@"refernce  %ld y:%ld ",x,y);
+        NSLog(@"reference  %ld y:%ld ",x,y);
         [tsc addReference:x y:y];
     }else{
         [tsc addReference:0 y:0];
@@ -92,18 +96,18 @@ RCT_EXPORT_METHOD(printLabel:(NSDictionary *) options withResolve:(RCTPromiseRes
         }
     }
 
-  //images
-        for (int i = 0; images && i < [images count]; i++) {
-            NSDictionary *img = [images objectAtIndex:i];
-            NSInteger x = [[img valueForKey:@"x"] integerValue];
-            NSInteger y = [[img valueForKey:@"y"] integerValue];
-            NSInteger imgWidth = [[img valueForKey:@"width"] integerValue];
-            NSInteger mode = [[img valueForKey:@"mode"] integerValue];
-            NSString *image  = [img valueForKey:@"image"];
-            NSData *imageData = [[NSData alloc] initWithBase64EncodedString:image options:0];
-            UIImage *uiImage = [[UIImage alloc] initWithData:imageData];
-            [tsc addBitmap:x y:y bitmapMode:mode width:imgWidth bitmap:uiImage];
-        }
+    //images
+    for (int i = 0; images && i < [images count]; i++) {
+        NSDictionary *img = [images objectAtIndex:i];
+        NSInteger x = [[img valueForKey:@"x"] integerValue];
+        NSInteger y = [[img valueForKey:@"y"] integerValue];
+        NSInteger imgWidth = [[img valueForKey:@"width"] integerValue];
+        NSInteger mode = [[img valueForKey:@"mode"] integerValue];
+        NSString *image  = [img valueForKey:@"image"];
+        NSData *imageData = [[NSData alloc] initWithBase64EncodedString:image options:0];
+        UIImage *uiImage = [[UIImage alloc] initWithData:imageData];
+        [tsc addBitmap:x y:y bitmapMode:mode width:imgWidth bitmap:uiImage];
+    }
 
     //QRCode
     for (int i = 0; qrCodes && i < [qrCodes count]; i++) {
@@ -134,6 +138,8 @@ RCT_EXPORT_METHOD(printLabel:(NSDictionary *) options withResolve:(RCTPromiseRes
        NSInteger readable = [[bar valueForKey:@"readable"] integerValue];
        [tsc add1DBarcode:x y:y barcodeType:type height:barHeight wide:barWide narrow:narrow readable:readable rotation:rotation content:code];
     }
+
+    //Reverse areas
     for(int i=0; reverses&& i < [reverses count]; i++){
         NSDictionary *area = [reverses objectAtIndex:i];
         NSInteger ax = [[area valueForKey:@"x"] integerValue];
@@ -150,7 +156,7 @@ RCT_EXPORT_METHOD(printLabel:(NSDictionary *) options withResolve:(RCTPromiseRes
     _pendingResolve = resolve;
     toPrint = tsc.command;
     now = 0;
-    [RNBluetoothManager writeValue:toPrint withDelegate:self];
+    [RNBluetoothManager writeValue:toPrint toAddress:address withDelegate:self];
 }
 
 - (void) didWriteDataToBle: (BOOL)success{

@@ -13,9 +13,7 @@
 int WIDTH_58 = 384;
 int WIDTH_80 = 576;
 Byte ESC[] = {0x1b};
-//NSInteger ESC = 0x1b;
 Byte ESC_FS[] = {0x1c};
-//NSInteger FS = 0x1C;
 Byte ESC_GS[] = {0x1D};
 Byte US[] = {0x1F};
 Byte DLE[] = {0x10};
@@ -37,14 +35,29 @@ Byte G[] = {0x47};//G
 
 RCTPromiseResolveBlock pendingResolve;
 RCTPromiseRejectBlock pendingReject;
+// Track the address for the current pending operation
+NSString *pendingAddress;
 
 -(id)init {
     if (self = [super init])  {
         self.deviceWidth = WIDTH_58;
+        self.deviceWidths = [[NSMutableDictionary alloc] init];
     }
     return self;
 }
 
+/**
+ * Gets the effective device width for a given address.
+ */
+-(NSInteger)getDeviceWidth:(NSString *)address {
+    if (address != nil && self.deviceWidths != nil) {
+        NSNumber *width = [self.deviceWidths objectForKey:address];
+        if (width != nil) {
+            return [width integerValue];
+        }
+    }
+    return self.deviceWidth;
+}
 
 - (dispatch_queue_t)methodQueue
 {
@@ -57,7 +70,7 @@ RCTPromiseRejectBlock pendingReject;
 
 
 /**
- * Exports the constants to javascritp.
+ * Exports the constants to javascript.
  **/
 - (NSDictionary *)constantsToExport
 {
@@ -68,42 +81,41 @@ RCTPromiseRejectBlock pendingReject;
 RCT_EXPORT_MODULE(BluetoothEscposPrinter);
 
 /**
- * Sets the current deivce width
+ * Sets the current device width. Optionally per-device by address.
  **/
-RCT_EXPORT_METHOD(setWidth:(int) width)
+RCT_EXPORT_METHOD(setWidth:(int) width address:(NSString *)address)
 {
-    self.deviceWidth = width;
+    if (address != nil && [address length] > 0) {
+        if (!self.deviceWidths) {
+            self.deviceWidths = [[NSMutableDictionary alloc] init];
+        }
+        [self.deviceWidths setObject:@(width) forKey:address];
+    } else {
+        self.deviceWidth = width;
+    }
 }
 
-//public void printerInit(final Promise promise){
-//    if(sendDataByte(PrinterCommand.POS_Set_PrtInit())){
-//        promise.resolve(null);
-//    }else{
-//        promise.reject("COMMAND_NOT_SEND");
-//    }
-//}
-
-RCT_EXPORT_METHOD(printerInit:(RCTPromiseResolveBlock)resolve
+RCT_EXPORT_METHOD(printerInit:(NSString *)address
+                  withResolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
-    if(RNBluetoothManager.isConnected){
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(connected){
         NSMutableData *data = [[NSMutableData alloc] init];
         Byte at[] = {'@'};
         [data appendBytes:ESC length:1];
         [data appendBytes:at length:1];
         pendingResolve = resolve;
         pendingReject = reject;
-        [RNBluetoothManager writeValue:data withDelegate:self];
+        pendingAddress = address;
+        [RNBluetoothManager writeValue:data toAddress:address withDelegate:self];
     }else{
         reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }
-    
 }
 
-//{GS, 'L', 0x00 , 0x00 }
-// data[2] = (byte) (left % 100);
-//data[3] = (byte) (left / 100);
 RCT_EXPORT_METHOD(printerLeftSpace:(int) sp
+                  address:(NSString *)address
                   withResolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
@@ -112,7 +124,8 @@ RCT_EXPORT_METHOD(printerLeftSpace:(int) sp
         return;
     }
     
-    if(RNBluetoothManager.isConnected){
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(connected){
         NSMutableData *data = [[NSMutableData alloc] init];
         Byte left[] = {'L'};
         Byte sp_up[] = {(sp%100)};
@@ -123,22 +136,24 @@ RCT_EXPORT_METHOD(printerLeftSpace:(int) sp
         [data appendBytes:sp_down length:1];
         pendingResolve = resolve;
         pendingReject = reject;
-        [RNBluetoothManager writeValue:data withDelegate:self];
+        pendingAddress = address;
+        [RNBluetoothManager writeValue:data toAddress:address withDelegate:self];
     }else{
         reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }
 }
 
-//{ESC, 45, 0x00 };
-//{FS, 45, 0x00 };
-RCT_EXPORT_METHOD(printerUnderLine:(int)sp withResolver:(RCTPromiseResolveBlock) resolve
+RCT_EXPORT_METHOD(printerUnderLine:(int)sp
+                  address:(NSString *)address
+                  withResolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
     if(sp<0 || sp>2){
           reject(@"COMMAND_NOT_SEND",@"INVALID_VALUE",nil);
         return;
     }
-    if(RNBluetoothManager.isConnected){
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(connected){
         NSMutableData *data = [[NSMutableData alloc] init];
         Byte under_line[] = {45};
         Byte spb[] = {sp};
@@ -150,38 +165,39 @@ RCT_EXPORT_METHOD(printerUnderLine:(int)sp withResolver:(RCTPromiseResolveBlock)
         [data appendBytes:spb length:1];
         pendingResolve = resolve;
         pendingReject = reject;
-        [RNBluetoothManager writeValue:data withDelegate:self];
+        pendingAddress = address;
+        [RNBluetoothManager writeValue:data toAddress:address withDelegate:self];
     }else{
         reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }
-    
 }
 
-RCT_EXPORT_METHOD(printText:(NSString *) text withOptions:(NSDictionary *) options
-                  resolver:(RCTPromiseResolveBlock) resolve rejecter:(RCTPromiseRejectBlock) reject)
-{NSLog(@"printing text...with options: %@",options);
-    if(!RNBluetoothManager.isConnected){
+RCT_EXPORT_METHOD(printText:(NSString *) text
+                  withOptions:(NSDictionary *) options
+                  address:(NSString *)address
+                  resolver:(RCTPromiseResolveBlock) resolve
+                  rejecter:(RCTPromiseRejectBlock) reject)
+{
+    NSLog(@"printing text...with options: %@",options);
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(!connected){
           reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }else{
         @try{
-    //encoding:'GBK',
-    //codepage:0,
-    //widthtimes:0,
-    //heigthtimes:0,
-    //fonttype:1
-        NSString *encodig = [options valueForKey:@"encoding"];
-        if(!encodig) encodig=@"GBK";
-            NSInteger codePage = [[options valueForKey:@"codepage"] integerValue];NSLog(@"Got codepage from options: %ld",codePage);
-        if(!codePage) codePage = 0;
-        NSInteger widthTimes = [[options valueForKey:@"widthtimes"] integerValue];
-        if(!widthTimes) widthTimes = 0;
-        NSInteger heigthTime = [[options valueForKey:@"heigthtimes"] integerValue];
-        if(!heigthTime) heigthTime =0;
-        NSInteger fontType = [[options valueForKey:@"fontType"] integerValue];
-        if(!fontType) fontType = 0;
+            NSString *encodig = [options valueForKey:@"encoding"];
+            if(!encodig) encodig=@"GBK";
+            NSInteger codePage = [[options valueForKey:@"codepage"] integerValue];
+            if(!codePage) codePage = 0;
+            NSInteger widthTimes = [[options valueForKey:@"widthtimes"] integerValue];
+            if(!widthTimes) widthTimes = 0;
+            NSInteger heigthTime = [[options valueForKey:@"heigthtimes"] integerValue];
+            if(!heigthTime) heigthTime =0;
+            NSInteger fontType = [[options valueForKey:@"fontType"] integerValue];
+            if(!fontType) fontType = 0;
             pendingResolve = resolve;
             pendingReject = reject;
-            [self textPrint:text inEncoding:encodig withCodePage:codePage widthTimes:widthTimes heightTimes:heigthTime fontType:fontType delegate:self];
+            pendingAddress = address;
+            [self textPrint:text inEncoding:encodig withCodePage:codePage widthTimes:widthTimes heightTimes:heigthTime fontType:fontType toAddress:address delegate:self];
         }
         @catch (NSException *e){
             NSLog(@"print text exception: %@",e);
@@ -189,22 +205,25 @@ RCT_EXPORT_METHOD(printText:(NSString *) text withOptions:(NSDictionary *) optio
         }
     }
 }
+
 -(NSStringEncoding) toNSEncoding:(NSString *)encoding
-{NSLog(@"encoding: %@",encoding);
+{
+    NSLog(@"encoding: %@",encoding);
     NSStringEncoding nsEncoding = CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000);
     if([@"UTF-8" isEqualToString:encoding] || [@"utf-8" isEqualToString:encoding] ){
         nsEncoding = NSUTF8StringEncoding;
     }
-    
     return nsEncoding;
 }
+
 -(void) textPrint:(NSString *) text
        inEncoding:(NSString *) encoding
      withCodePage:(NSInteger) codePage
        widthTimes:(NSInteger) widthTimes
       heightTimes:(NSInteger) heightTimes
          fontType:(NSInteger) fontType
-     delegate:(NSObject<WriteDataToBleDelegate> *) delegate
+        toAddress:(NSString *) address
+         delegate:(NSObject<WriteDataToBleDelegate> *) delegate
 {
     Byte *intToWidth[] = {0x00, 0x10, 0x20, 0x30};
     Byte *intToHeight[] = {0x00, 0x01, 0x02, 0x03};
@@ -221,37 +240,47 @@ RCT_EXPORT_METHOD(printText:(NSString *) text withOptions:(NSDictionary *) optio
     //escT:  {ESC, 't', 0x00 };
     [toSend appendBytes:ESC length:sizeof(ESC)];
     [toSend appendBytes:T length:sizeof(T)];
-    [toSend appendBytes:&codePage length:sizeof(codePage)];NSLog(@"codepage: %lu",codePage);
+    [toSend appendBytes:&codePage length:sizeof(codePage)];
     if(codePage == 0){
         //FS_and :{FS, '&' };
         [toSend appendBytes:ESC_FS length:sizeof(ESC_FS)];
         [toSend appendBytes:AND length:sizeof(AND)];
-    }else{NSLog(@"{FS,46}");
+    }else{
         //FS_dot: {FS, 46 };
         NSInteger fourtySix= 46;
         [toSend appendBytes:ESC_FS length:sizeof(ESC_FS)];
         [toSend appendBytes:&fourtySix length:sizeof(fourtySix)];
     }
-//    escM:{ESC, 'M', 0x00 };
+    //escM:{ESC, 'M', 0x00 };
     [toSend appendBytes:ESC length:sizeof(ESC)];
     [toSend appendBytes:M length:sizeof(M)];
     [toSend appendBytes:&fontType length:sizeof(fontType)];
     // text data
     [toSend appendData:bytes];
-    //LF
-   // [toSend appendBytes:&NL length:sizeof(NL)];
   
-    NSLog(@"Goting to write text : %@",text);
+    NSLog(@"Going to write text : %@",text);
     NSLog(@"With data: %@",toSend);
-    [RNBluetoothManager writeValue:toSend withDelegate:delegate];
+    [RNBluetoothManager writeValue:toSend toAddress:address withDelegate:delegate];
+}
+
+/** Backward-compatible version without address */
+-(void) textPrint:(NSString *) text
+       inEncoding:(NSString *) encoding
+     withCodePage:(NSInteger) codePage
+       widthTimes:(NSInteger) widthTimes
+      heightTimes:(NSInteger) heightTimes
+         fontType:(NSInteger) fontType
+         delegate:(NSObject<WriteDataToBleDelegate> *) delegate
+{
+    [self textPrint:text inEncoding:encoding withCodePage:codePage widthTimes:widthTimes heightTimes:heightTimes fontType:fontType toAddress:nil delegate:delegate];
 }
 
 RCT_EXPORT_METHOD(rotate:(NSInteger *)rotate
+                  address:(NSString *)address
                   withResolver:(RCTPromiseResolveBlock) resolve rejecter:(RCTPromiseRejectBlock) reject)
 {
-    if(RNBluetoothManager.isConnected){
-        //    //取消/选择90度旋转打印
-       // public static byte[] ESC_V = new byte[] {ESC, 'V', 0x00 };
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(connected){
         NSMutableData *data = [[NSMutableData alloc] init];
         Byte rotateBytes[] = {(int)rotate};
         [data appendBytes:ESC length:1];
@@ -259,24 +288,22 @@ RCT_EXPORT_METHOD(rotate:(NSInteger *)rotate
         [data appendBytes:rotateBytes length:1];
         pendingReject = reject;
         pendingResolve = resolve;
-        [RNBluetoothManager writeValue:data withDelegate:self];
+        pendingAddress = address;
+        [RNBluetoothManager writeValue:data toAddress:address withDelegate:self];
     }else{
            reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }
-//        if(sendDataByte(PrinterCommand.POS_Set_Rotate(rotate))){
-//            promise.resolve(null);
-//        }else{
-//            promise.reject("COMMAND_NOT_SEND");
-//        }
 }
 
 RCT_EXPORT_METHOD(printerAlign:(nonnull NSNumber *)align
+                  address:(NSString *)address
                   withResolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
     NSInteger alignValue = [align integerValue];
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
 
-    if (RNBluetoothManager.isConnected) {
+    if (connected) {
         if ((alignValue < 0 || alignValue > 2) && (alignValue < 48 || alignValue > 50)) {
             reject(@"INVALID_PARAMETERS", @"INVALID_PARAMETERS", nil);
         } else {
@@ -286,7 +313,8 @@ RCT_EXPORT_METHOD(printerAlign:(nonnull NSNumber *)align
             [toSend appendBytes:&alignValue length:sizeof(alignValue)];
             pendingReject = reject;
             pendingResolve = resolve;
-            [RNBluetoothManager writeValue:toSend withDelegate:self];
+            pendingAddress = address;
+            [RNBluetoothManager writeValue:toSend toAddress:address withDelegate:self];
         }
     } else {
         reject(@"COMMAND_NOT_SEND", @"COMMAND_NOT_SEND", nil);
@@ -297,16 +325,18 @@ RCT_EXPORT_METHOD(printColumn:(NSArray *)columnWidths
                   withAligns:(NSArray *) columnAligns
                   texts:(NSArray *) columnTexts
                   options:(NSDictionary *)options
+                  address:(NSString *)address
                   resolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
-    if(!RNBluetoothManager.isConnected){
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(!connected){
         reject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }else{
         @try{
             NSString *encodig = [options valueForKey:@"encoding"];
             if(!encodig) encodig=@"GBK";
-            NSInteger codePage = [[options valueForKey:@"codepage"] integerValue];NSLog(@"Got codepage from options: %ld",codePage);
+            NSInteger codePage = [[options valueForKey:@"codepage"] integerValue];
             if(!codePage) codePage = 0;
             NSInteger widthTimes = [[options valueForKey:@"widthtimes"] integerValue];
             if(!widthTimes) widthTimes = 0;
@@ -314,121 +344,101 @@ RCT_EXPORT_METHOD(printColumn:(NSArray *)columnWidths
             if(!heigthTime) heigthTime =0;
             NSInteger fontType = [[options valueForKey:@"fontType"] integerValue];
             if(!fontType) fontType = 0;
-          /**
-                 * [column1-1,
-                 * column1-2,
-                 * column1-3 ... column1-n]
-                 * ,
-                 *  [column2-1,
-                 * column2-2,
-                 * column2-3 ... column2-n]
-                 *
-                 * ...
-                 *
-                 */
+
             NSMutableArray *table =[[NSMutableArray alloc] init];
             
-                /**splits the column text to few rows and applies the alignment **/
-                int padding = 1;
-                for(int i=0;i< [columnWidths count];i++){
-                    NSInteger width =[[columnWidths objectAtIndex:i ] integerValue] - padding;//1 char padding
-                    NSString *text = [columnTexts objectAtIndex:i]; //String.copyValueOf(columnTexts.getString(i).toCharArray());
-                    NSLog(@"Text in column: %@",text);
-                    NSMutableArray<ColumnSplitedString *> *splited = [[NSMutableArray alloc] init];
-                    //List<ColumnSplitedString> splited = new ArrayList<ColumnSplitedString>();
-                    int shorter = 0;
-                    int counter = 0;
-                   NSMutableString *temp = [[NSMutableString alloc] init];
-                   
-                    for(int c=0;c<[text length];c++){
-                        unichar ch = [text characterAtIndex:c];
-                        int l = (ch>= 0x4e00 && ch <= 0x9fff)?2:1;
-                        if (l==2){
-                            shorter=shorter+1;
-                        }
-                        [temp appendString:[text substringWithRange:NSMakeRange(c, 1)]];
-                        if(counter+l<width){
-                            counter = counter+l;
-                        }else{
-                            ColumnSplitedString *css = [[ColumnSplitedString alloc] init];
-                            css.str = temp;
-                            css.shorter = shorter;
-                            [splited addObject:css];
-                            temp = [[NSMutableString alloc] init];
-                            counter=0;
-                            shorter=0;
-                        }
+            int padding = 1;
+            for(int i=0;i< [columnWidths count];i++){
+                NSInteger width =[[columnWidths objectAtIndex:i ] integerValue] - padding;
+                NSString *text = [columnTexts objectAtIndex:i];
+                NSLog(@"Text in column: %@",text);
+                NSMutableArray<ColumnSplitedString *> *splited = [[NSMutableArray alloc] init];
+                int shorter = 0;
+                int counter = 0;
+               NSMutableString *temp = [[NSMutableString alloc] init];
+               
+                for(int c=0;c<[text length];c++){
+                    unichar ch = [text characterAtIndex:c];
+                    int l = (ch>= 0x4e00 && ch <= 0x9fff)?2:1;
+                    if (l==2){
+                        shorter=shorter+1;
                     }
-                    if([temp length]>0) {
+                    [temp appendString:[text substringWithRange:NSMakeRange(c, 1)]];
+                    if(counter+l<width){
+                        counter = counter+l;
+                    }else{
                         ColumnSplitedString *css = [[ColumnSplitedString alloc] init];
                         css.str = temp;
                         css.shorter = shorter;
                         [splited addObject:css];
+                        temp = [[NSMutableString alloc] init];
+                        counter=0;
+                        shorter=0;
                     }
-                    NSInteger align =[[columnAligns objectAtIndex:i] integerValue];
-            
-                    NSMutableArray *formated = [[NSMutableArray alloc] init];
-                    for(ColumnSplitedString *s in splited){
+                }
+                if([temp length]>0) {
+                    ColumnSplitedString *css = [[ColumnSplitedString alloc] init];
+                    css.str = temp;
+                    css.shorter = shorter;
+                    [splited addObject:css];
+                }
+                NSInteger align =[[columnAligns objectAtIndex:i] integerValue];
+        
+                NSMutableArray *formated = [[NSMutableArray alloc] init];
+                for(ColumnSplitedString *s in splited){
+                    NSMutableString *empty = [[NSMutableString alloc] init];
+                    for(int w=0;w<(width+padding-s.shorter);w++){
+                        [empty appendString:@" "];
+                    }
+                    int startIdx = 0;
+                    NSString *ss = s.str;
+                    if(align == 1 && [ss length]<(width-s.shorter)){
+                        startIdx = (int)(width-s.shorter-[ss length])/2;
+                        if(startIdx+[ss length]>width-s.shorter){
+                            startIdx--;
+                        }
+                        if(startIdx<0){
+                            startIdx=0;
+                        }
+                    }else if(align==2 && [ss length]<(width-s.shorter)){
+                        startIdx =(int)(width - s.shorter-[ss length]);
+                    }
+                    NSInteger length =[ss length];
+                    NSLog(@"empty(length: %lu) replace from %d length %lu with str:%@)",[empty length],startIdx,length,ss);
+                    [empty replaceCharactersInRange:NSMakeRange(startIdx, length) withString:ss];
+                    [formated addObject:empty];
+                }
+                [table addObject:formated];
+            }
+        
+            NSInteger maxRowCount = 0;
+            for(int i=0;i<[table count];i++){
+                NSArray *rows = [table objectAtIndex:i];
+                if([rows count]>maxRowCount){
+                    maxRowCount = [rows count];
+                }
+            }
+        
+            NSMutableArray<NSMutableString *> *rowsToPrint = [[NSMutableArray alloc] init];
+            for(int column=0;column<[table count];column++){
+                NSArray *rows = [table objectAtIndex:column];
+                for(int row=0;row<maxRowCount;row++){
+                    if([rowsToPrint count]<=row || [rowsToPrint objectAtIndex:row] ==nil){
+                       [rowsToPrint setObject:[[NSMutableString alloc] init] atIndexedSubscript:row];
+                    }
+                    if(row<[rows count]){
+                        [(NSMutableString *)[rowsToPrint objectAtIndex:row] appendString:[rows objectAtIndex:row]];
+                    }else{
+                        NSInteger w = [[columnWidths objectAtIndex:column] integerValue];
                         NSMutableString *empty = [[NSMutableString alloc] init];
-                        for(int w=0;w<(width+padding-s.shorter);w++){
+                        for(int i=0;i<w;i++){
                             [empty appendString:@" "];
                         }
-                        int startIdx = 0;
-                        NSString *ss = s.str;
-                        if(align == 1 && [ss length]<(width-s.shorter)){
-                            startIdx = (int)(width-s.shorter-[ss length])/2;
-                            if(startIdx+[ss length]>width-s.shorter){
-                                startIdx--;
-                            }
-                            if(startIdx<0){
-                                startIdx=0;
-                            }
-                        }else if(align==2 && [ss length]<(width-s.shorter)){
-                            startIdx =(int)(width - s.shorter-[ss length]);
-                        }
-                        NSInteger length =[ss length];
-//                        if(length+startIdx>[empty length]){
-//                            length = [empty length]-startIdx;
-//                        }
-                        NSLog(@"empty(length: %lu) replace from %d length %lu with str:%@)",[empty length],startIdx,length,ss);
-                        [empty replaceCharactersInRange:NSMakeRange(startIdx, length) withString:ss];
-                        [formated addObject:empty];
-                    }
-                    [table addObject:formated];
-                }
-            
-            /**  try to find the max row count of the table **/
-                NSInteger maxRowCount = 0;
-                for(int i=0;i<[table count]/*column count*/;i++){
-                    NSArray *rows = [table objectAtIndex:i]; // row data in current column
-                    if([rows count]>maxRowCount){
-                        maxRowCount = [rows count];// try to find the max row count;
+                         [(NSMutableString *)[rowsToPrint objectAtIndex:row] appendString:empty];
                     }
                 }
-            
-                /** loop table again to fill the rows **/
-            NSMutableArray<NSMutableString *> *rowsToPrint = [[NSMutableArray alloc] init];
-                for(int column=0;column<[table count]/*column count*/;column++){
-                    NSArray *rows = [table objectAtIndex:column]; // row data in current column
-                    for(int row=0;row<maxRowCount;row++){
-                        if([rowsToPrint count]<=row || [rowsToPrint objectAtIndex:row] ==nil){
-                           [rowsToPrint setObject:[[NSMutableString alloc] init] atIndexedSubscript:row];
-                        }
-                        if(row<[rows count]){
-                            //got the row of this column
-                            [(NSMutableString *)[rowsToPrint objectAtIndex:row] appendString:[rows objectAtIndex:row]];//.append(rows.get(row));
-                        }else{
-                            NSInteger w = [[columnWidths objectAtIndex:column] integerValue]; //columnWidths.getInt(column);
-                            NSMutableString *empty = [[NSMutableString alloc] init];
-                            for(int i=0;i<w;i++){
-                                [empty appendString:@" "]; //empty.append(" ");
-                            }
-                             [(NSMutableString *)[rowsToPrint objectAtIndex:row] appendString:empty];//Append spaces to ensure the format
-                        }
-                    }
-                }
-            
-                /** loops the rows and print **/
+            }
+        
             PrintColumnBleWriteDelegate *delegate = [[PrintColumnBleWriteDelegate alloc] init];
             delegate.now = 0;
             delegate.error = false;
@@ -441,24 +451,21 @@ RCT_EXPORT_METHOD(printColumn:(NSArray *)columnWidths
             delegate.fontType = fontType;
             delegate.codePage = codePage;
             delegate.printer = self;
+            delegate.targetAddress = address;
             [delegate printColumn:rowsToPrint withMaxcount:maxRowCount];
         }
         @catch(NSException *e){
             NSLog(@"print text exception: %@",[e callStackSymbols]);
             reject(e.name.description,e.name.description,nil);
         }
-        
     }
 }
 
 RCT_EXPORT_METHOD(setBold:(NSInteger) sp
+                  address:(NSString *)address
                   withResolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
-    //\\    //选择/取消加粗指令
-//    public static byte[] ESC_G = new byte[] {ESC, 'G', 0x00 };
-//    public static byte[] ESC_E = new byte[] {ESC, 'E', 0x00 };
-    //E+G
     NSMutableData *toSend = [[NSMutableData alloc] init];
     [toSend appendBytes:&ESC length:sizeof(ESC)];
     [toSend appendBytes:&G length:sizeof(G)];
@@ -468,28 +475,30 @@ RCT_EXPORT_METHOD(setBold:(NSInteger) sp
     [toSend appendBytes:&sp length:sizeof(sp)];
     pendingReject =reject;
     pendingResolve = resolve;
-    [RNBluetoothManager writeValue:toSend withDelegate:self];
+    pendingAddress = address;
+    [RNBluetoothManager writeValue:toSend toAddress:address withDelegate:self];
 }
 
-RCT_EXPORT_METHOD(printPic:(NSString *) base64encodeStr withOptions:(NSDictionary *) options
+RCT_EXPORT_METHOD(printPic:(NSString *) base64encodeStr
+                  withOptions:(NSDictionary *) options
+                  address:(NSString *)address
                   resolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
-    if(RNBluetoothManager.isConnected){
+    BOOL connected = (address != nil) ? [RNBluetoothManager isConnectedToAddress:address] : [RNBluetoothManager isConnected];
+    if(connected){
         @try{
             NSInteger nWidth = [[options valueForKey:@"width"] integerValue];
-            if(!nWidth) nWidth = _deviceWidth;
-            //TODO:need to handel param "left" in the options.
+            if(!nWidth) nWidth = [self getDeviceWidth:address];
             NSInteger paddingLeft = [[options valueForKey:@"left"] integerValue];
             if(!paddingLeft) paddingLeft = 0;
             NSData *decoded = [[NSData alloc] initWithBase64EncodedString:base64encodeStr options:0 ];
             UIImage *srcImage = [[UIImage alloc] initWithData:decoded scale:1];
             NSData *jpgData = UIImageJPEGRepresentation(srcImage, 1);
             UIImage *jpgImage = [[UIImage alloc] initWithData:jpgData];
-            //mBitmap.getHeight() * width / mBitmap.getWidth();
             NSInteger imgHeight = jpgImage.size.height;
             NSInteger imagWidth = jpgImage.size.width;
-            NSInteger width = nWidth;//((int)(((nWidth*0.86)+7)/8))*8-7;
+            NSInteger width = nWidth;
             CGSize size = CGSizeMake(width, imgHeight*width/imagWidth);
             UIImage *scaled = [ImageUtils imageWithImage:jpgImage scaledToFillSize:size];
             if(paddingLeft>0){
@@ -506,6 +515,7 @@ RCT_EXPORT_METHOD(printPic:(NSString *) base64encodeStr withOptions:(NSDictionar
             delegate.width = width;
             delegate.toPrint  = dataToPrint;
             delegate.now = 0;
+            delegate.targetAddress = address;
             [delegate print];
         }
         @catch(NSException *e){
@@ -521,6 +531,7 @@ RCT_EXPORT_METHOD(printQRCode:(NSString *)content
                   withSize:(NSInteger) size
                   correctionLevel:(NSInteger) correctionLevel
                   leftPadding: (NSInteger) leftPadding
+                  address:(NSString *)address
                   andResolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
@@ -552,6 +563,7 @@ RCT_EXPORT_METHOD(printQRCode:(NSString *)content
         delegate.toPrint  = dataToPrint;
         delegate.left = leftPadding;
         delegate.now = 0;
+        delegate.targetAddress = address;
         [delegate print];
     }
 }
@@ -559,6 +571,7 @@ RCT_EXPORT_METHOD(printQRCode:(NSString *)content
 RCT_EXPORT_METHOD(printBarCode:(NSString *) str withType:(NSInteger)
                   nType width:(NSInteger) nWidth heigth:(NSInteger) nHeight
                   hriFontType:(NSInteger) nHriFontType hriFontPosition:(NSInteger) nHriFontPosition
+                  address:(NSString *)address
                   andResolver:(RCTPromiseResolveBlock) resolve
                   rejecter:(RCTPromiseRejectBlock) reject)
 {
@@ -570,7 +583,7 @@ RCT_EXPORT_METHOD(printBarCode:(NSString *) str withType:(NSInteger)
       }
     
     NSData *conentData = [str dataUsingEncoding:CFStringConvertEncodingToNSStringEncoding(kCFStringEncodingGB_18030_2000)];
-    NSMutableData *toPrint = [[NSMutableData alloc] init];
+    NSMutableData *toPrintData = [[NSMutableData alloc] init];
     int8_t * command = malloc(16);
         command[0] = 29 ;//GS
         command[1] = 119;//W
@@ -588,44 +601,39 @@ RCT_EXPORT_METHOD(printBarCode:(NSString *) str withType:(NSInteger)
         command[13] = 107;//k
         command[14] = nType;
         command[15] = [conentData length];
-    [toPrint appendBytes:command length:16];
-    [toPrint appendData:conentData];
+    [toPrintData appendBytes:command length:16];
+    [toPrintData appendData:conentData];
     
     pendingReject = reject;
     pendingResolve = resolve;
-    [RNBluetoothManager writeValue:toPrint withDelegate:self];
+    pendingAddress = address;
+    [RNBluetoothManager writeValue:toPrintData toAddress:address withDelegate:self];
 }
-//nMode1:27,
-//nMode2:112,
-//nMode3:48,
-//nMode4:55
-//nMode5:121
+
 RCT_EXPORT_METHOD(openDrawer:(NSString *) str
                    mode1:(NSInteger) nMode1
                    mode2:(NSInteger) nMode2
                    mode3:(NSInteger) nMode3
                    mode4:(NSInteger) nMode4
                    mode5:(NSInteger) nMode5
+                   address:(NSString *)address
                    andResolver:(RCTPromiseResolveBlock) resolve
                    rejecter:(RCTPromiseRejectBlock) reject)
  {
-    NSMutableData *toPrint = [[NSMutableData alloc] init];
+    NSMutableData *toPrintData = [[NSMutableData alloc] init];
     int8_t * command = malloc(5);
      command[0] = nMode1;
      command[1] = nMode2;
      command[2] = nMode3;
      command[3] = nMode4;
      command[4] = nMode5;
-    [toPrint appendBytes:command length:5];
+    [toPrintData appendBytes:command length:5];
     pendingReject = reject;
     pendingResolve = resolve;
-    [RNBluetoothManager writeValue:toPrint withDelegate:self];
-
+    pendingAddress = address;
+    [RNBluetoothManager writeValue:toPrintData toAddress:address withDelegate:self];
  }
-//  L:1,
-//M:0,
-//Q:3,
-//H:2
+
 -(ZXQRCodeErrorCorrectionLevel *)findCorrectionLevel:(NSInteger)level
 {
     switch (level) {
@@ -645,11 +653,13 @@ RCT_EXPORT_METHOD(openDrawer:(NSString *) str
 - (void) didWriteDataToBle: (BOOL)success{
     if(success){
         pendingResolve(nil);
-    }else{NSLog(@"REJECT<REJECT<REJECT<REJECT<REJECT<");
+    }else{
+        NSLog(@"REJECT<REJECT<REJECT<REJECT<REJECT<");
         pendingReject(@"COMMAND_NOT_SEND",@"COMMAND_NOT_SEND",nil);
     }
     pendingReject = nil;
     pendingResolve = nil;
+    pendingAddress = nil;
     [NSThread sleepForTimeInterval:0.05f];//slow down
 }
 

@@ -19,5 +19,7 @@
 @property NSInteger widthTimes;
 @property NSInteger heightTimes;
 @property NSInteger fontType;
+/** Optional target device address for multi-printer routing */
+@property (nonatomic, strong) NSString *targetAddress;
 -(void)printColumn:(NSMutableArray<NSMutableString *> *) columnsToPrint withMaxcount:(NSInteger)maxcount;
 @end

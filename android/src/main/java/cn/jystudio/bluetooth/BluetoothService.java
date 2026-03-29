@@ -3,7 +3,6 @@ package cn.jystudio.bluetooth;
 
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
-import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
 import android.content.Context;
 import android.util.Log;
@@ -12,36 +11,36 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.*;
-import java.lang.reflect.Method;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * This class does all the work for setting up and managing Bluetooth
- * connections with other devices.
+ * connections with other devices. Supports multiple simultaneous connections
+ * keyed by device MAC address.
  */
 public class BluetoothService {
     // Debugging
     private static final String TAG = "BluetoothService";
     private static final boolean DEBUG = true;
 
+    // Maximum number of simultaneous connections allowed
+    public static final int MAX_CONNECTIONS = 7;
 
     // Name for the SDP record when creating server socket
     private static final String NAME = "BTPrinter";
-    //UUID must be this
-    // Unique UUID for this application
+    // UUID must be this — Unique UUID for this application (SPP)
     private static final UUID MY_UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB");
 
     // Member fields
     private BluetoothAdapter mAdapter;
 
-    private ConnectedThread mConnectedThread;
-    private int mState;
+    // Connection pool: maps device address → ConnectedThread
+    private final ConcurrentHashMap<String, ConnectedThread> mConnections = new ConcurrentHashMap<>();
 
     // Constants that indicate the current connection state
     public static final int STATE_NONE = 0;       // we're doing nothing
-   // public static final int STATE_LISTEN = 1;     // now listening for incoming connections //feathure removed.
-    public static final int STATE_CONNECTING = 2; // now initiating an outgoing connection
-    public static final int STATE_CONNECTED = 3;  // now connected to a remote device
-
+    public static final int STATE_CONNECTING = 2;  // now initiating an outgoing connection
+    public static final int STATE_CONNECTED = 3;   // now connected to a remote device
 
     public static final int MESSAGE_STATE_CHANGE = 4;
     public static final int MESSAGE_READ = 5;
@@ -57,7 +56,8 @@ public class BluetoothService {
 
     public static String ErrorMessage = "No_Error_Message";
 
-    private static List<BluetoothServiceStateObserver> observers = new ArrayList<BluetoothServiceStateObserver>();
+    private static final List<BluetoothServiceStateObserver> observers =
+            Collections.synchronizedList(new ArrayList<BluetoothServiceStateObserver>());
 
     /**
      * Constructor. Prepares a new BTPrinter session.
@@ -66,8 +66,6 @@ public class BluetoothService {
      */
     public BluetoothService(Context context) {
         mAdapter = BluetoothAdapter.getDefaultAdapter();
-        mState = STATE_NONE;
-
     }
 
     public void addStateObserver(BluetoothServiceStateObserver observer) {
@@ -78,123 +76,258 @@ public class BluetoothService {
         observers.remove(observer);
     }
 
-    /**
-     * Set the current state of the connection
-     *
-     * @param state An integer defining the current connection state
-     */
-    private synchronized void setState(int state, Map<String, Object> bundle) {
-        if (DEBUG) Log.d(TAG, "setState() " + getStateName(mState) + " -> " + getStateName(state));
-        mState = state;
-        infoObervers(state, bundle);
-    }
-    private String getStateName(int state){
-        String name="UNKNOW:" + state;
-        if(STATE_NONE == state){
-            name="STATE_NONE";
-        }else if(STATE_CONNECTED == state){
-            name="STATE_CONNECTED";
-        }else if(STATE_CONNECTING ==  state){
-            name="STATE_CONNECTING";
+    private String getStateName(int state) {
+        switch (state) {
+            case STATE_NONE:
+                return "STATE_NONE";
+            case STATE_CONNECTING:
+                return "STATE_CONNECTING";
+            case STATE_CONNECTED:
+                return "STATE_CONNECTED";
+            default:
+                return "UNKNOWN:" + state;
         }
-        return name;
     }
 
-    private synchronized void infoObervers(int code, Map<String, Object> bundle) {
+    private synchronized void infoObservers(int code, Map<String, Object> bundle) {
         for (BluetoothServiceStateObserver ob : observers) {
             ob.onBluetoothServiceStateChanged(code, bundle);
         }
     }
 
     /**
-     * Return the current connection state.
+     * Return the aggregate connection state.
+     * Returns STATE_CONNECTED if any device is connected,
+     * STATE_NONE otherwise.
      */
     public synchronized int getState() {
-        return mState;
+        for (ConnectedThread thread : mConnections.values()) {
+            if (thread.isConnected()) {
+                return STATE_CONNECTED;
+            }
+        }
+        return STATE_NONE;
     }
 
+    /**
+     * Return the connection state for a specific device address.
+     *
+     * @param address The MAC address of the device
+     */
+    public synchronized int getState(String address) {
+        if (address == null) {
+            return getState();
+        }
+        ConnectedThread thread = mConnections.get(address);
+        if (thread != null && thread.isConnected()) {
+            return STATE_CONNECTED;
+        }
+        return STATE_NONE;
+    }
 
     /**
-     * Start the ConnectThread to initiate a connection to a remote device.
+     * Returns the number of active connections.
+     */
+    public int getConnectionCount() {
+        int count = 0;
+        for (ConnectedThread thread : mConnections.values()) {
+            if (thread.isConnected()) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Start the ConnectedThread to initiate a connection to a remote device.
+     * Supports multiple simultaneous connections up to MAX_CONNECTIONS.
      *
      * @param device The BluetoothDevice to connect
      */
     public synchronized void connect(BluetoothDevice device) {
-        if (DEBUG) Log.d(TAG, "connect to: " + device);
-        BluetoothDevice connectedDevice = null;
-        if(mConnectedThread!=null){
-            connectedDevice = mConnectedThread.bluetoothDevice();
+        if (device == null) {
+            Log.e(TAG, "connect() called with null device");
+            return;
         }
-        if( mState==STATE_CONNECTED && connectedDevice!=null && connectedDevice.getAddress().equals(device.getAddress())){
-            // connected already
-            Map<String, Object> bundle = new HashMap<String, Object>();
+        String address = device.getAddress();
+        if (DEBUG) Log.d(TAG, "connect to: " + address);
+
+        // Check if already connected to this device
+        ConnectedThread existingThread = mConnections.get(address);
+        if (existingThread != null && existingThread.isConnected()) {
+            if (DEBUG) Log.d(TAG, "Already connected to " + address);
+            Map<String, Object> bundle = new HashMap<>();
             bundle.put(DEVICE_NAME, device.getName());
-            bundle.put(DEVICE_ADDRESS,device.getAddress());
-            setState(STATE_CONNECTED, bundle);
-        }else {
-            // Cancel any thread currently running a connection
-            this.stop();
-            // Start the thread to manage the connection and perform transmissions
-            mConnectedThread = new ConnectedThread(device);
-            mConnectedThread.start();
-            setState(STATE_CONNECTING, null);
+            bundle.put(DEVICE_ADDRESS, address);
+            infoObservers(STATE_CONNECTED, bundle);
+            return;
         }
-    }
 
+        // Check connection limit
+        if (getConnectionCount() >= MAX_CONNECTIONS) {
+            Log.e(TAG, "Maximum connections (" + MAX_CONNECTIONS + ") reached. Cannot connect to " + address);
+            Map<String, Object> bundle = new HashMap<>();
+            bundle.put(DEVICE_ADDRESS, address);
+            infoObservers(MESSAGE_UNABLE_CONNECT, bundle);
+            return;
+        }
 
-    public synchronized BluetoothDevice getConnectedDevice() { 
-        BluetoothDevice connectedDevice = null;
-        if(mConnectedThread!=null){
-            connectedDevice = mConnectedThread.bluetoothDevice();
+        // Cancel existing thread for this address if it exists (e.g., a stale/disconnected one)
+        if (existingThread != null) {
+            existingThread.cancel();
+            mConnections.remove(address);
         }
-        if(mState==STATE_CONNECTED && connectedDevice!=null){
-            return connectedDevice;
-        } else {
-            return null;
-        }
+
+        // Start the thread to manage the connection and perform transmissions
+        ConnectedThread thread = new ConnectedThread(device);
+        mConnections.put(address, thread);
+        thread.start();
+
+        Map<String, Object> bundle = new HashMap<>();
+        bundle.put(DEVICE_ADDRESS, address);
+        infoObservers(STATE_CONNECTING, bundle);
     }
 
     /**
-     * Stop all threads
+     * Get the first connected device (backward compatibility).
+     */
+    public synchronized BluetoothDevice getConnectedDevice() {
+        for (ConnectedThread thread : mConnections.values()) {
+            BluetoothDevice device = thread.bluetoothDevice();
+            if (device != null) {
+                return device;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Get a specific connected device by address.
+     *
+     * @param address The MAC address of the device
+     */
+    public synchronized BluetoothDevice getConnectedDevice(String address) {
+        if (address == null) {
+            return getConnectedDevice();
+        }
+        ConnectedThread thread = mConnections.get(address);
+        if (thread != null) {
+            return thread.bluetoothDevice();
+        }
+        return null;
+    }
+
+    /**
+     * Get all connected devices.
+     */
+    public synchronized List<BluetoothDevice> getConnectedDevices() {
+        List<BluetoothDevice> devices = new ArrayList<>();
+        for (ConnectedThread thread : mConnections.values()) {
+            BluetoothDevice device = thread.bluetoothDevice();
+            if (device != null) {
+                devices.add(device);
+            }
+        }
+        return devices;
+    }
+
+    /**
+     * Stop all threads / disconnect all devices.
      */
     public synchronized void stop() {
-        if (mConnectedThread != null) {
-            mConnectedThread.cancel();
-            mConnectedThread = null;
+        for (Map.Entry<String, ConnectedThread> entry : mConnections.entrySet()) {
+            entry.getValue().cancel();
+        }
+        mConnections.clear();
+    }
+
+    /**
+     * Stop a specific connection by address.
+     *
+     * @param address The MAC address of the device to disconnect
+     */
+    public synchronized void stop(String address) {
+        if (address == null) {
+            stop();
+            return;
+        }
+        ConnectedThread thread = mConnections.remove(address);
+        if (thread != null) {
+            thread.cancel();
         }
     }
 
     /**
-     * Write to the ConnectedThread in an unsynchronized manner
+     * Write to a specific connected device.
      *
-     * @param out The bytes to write
-     * @see ConnectedThread#write(byte[])
+     * @param out     The bytes to write
+     * @param address The MAC address of the target device (null = first connected)
      */
-    public void write(byte[] out) {
-        // Create temporary object
+    public void write(byte[] out, String address) {
         ConnectedThread r;
-        // Synchronize a copy of the ConnectedThread
         synchronized (this) {
-            if (mState != STATE_CONNECTED) return;
-            r = mConnectedThread;
+            if (address != null) {
+                r = mConnections.get(address);
+            } else {
+                // Fallback: write to the first connected device
+                r = getFirstConnectedThread();
+            }
+            if (r == null || !r.isConnected()) return;
         }
         r.write(out);
     }
 
     /**
-     * Indicate that the connection attempt failed.
+     * Write to the first connected device (backward compatibility).
+     *
+     * @param out The bytes to write
      */
-    private void connectionFailed() {
-        setState(STATE_NONE, null);
-        infoObervers(MESSAGE_UNABLE_CONNECT, null);
+    public void write(byte[] out) {
+        write(out, null);
     }
 
     /**
-     * Indicate that the connection was lost and notify the UI Activity.
+     * Returns the first connected thread, or null if none.
      */
-    private void connectionLost() {
-        setState(STATE_NONE, null);
-        infoObervers(MESSAGE_CONNECTION_LOST, null);
+    private ConnectedThread getFirstConnectedThread() {
+        for (ConnectedThread thread : mConnections.values()) {
+            if (thread.isConnected()) {
+                return thread;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Indicate that the connection attempt failed for a specific device.
+     */
+    private void connectionFailed(String address) {
+        Map<String, Object> bundle = new HashMap<>();
+        if (address != null) {
+            bundle.put(DEVICE_ADDRESS, address);
+        }
+        infoObservers(MESSAGE_UNABLE_CONNECT, bundle);
+
+        // Clean up
+        if (address != null) {
+            mConnections.remove(address);
+        }
+    }
+
+    /**
+     * Indicate that the connection was lost for a specific device.
+     */
+    private void connectionLost(String address) {
+        Map<String, Object> bundle = new HashMap<>();
+        if (address != null) {
+            bundle.put(DEVICE_ADDRESS, address);
+        }
+        infoObservers(MESSAGE_CONNECTION_LOST, bundle);
+
+        // Clean up
+        if (address != null) {
+            mConnections.remove(address);
+        }
     }
 
     /**
@@ -203,62 +336,66 @@ public class BluetoothService {
      */
     private class ConnectedThread extends Thread {
         private final BluetoothDevice mmDevice;
-        private  BluetoothSocket mmSocket;
-        private  InputStream mmInStream;
-        private  OutputStream mmOutStream;
+        private BluetoothSocket mmSocket;
+        private InputStream mmInStream;
+        private OutputStream mmOutStream;
+        private volatile boolean mmConnected = false;
 
         public ConnectedThread(BluetoothDevice device) {
             mmDevice = device;
+            setName("ConnectedThread-" + device.getAddress());
+        }
+
+        public boolean isConnected() {
+            return mmConnected && mmSocket != null && mmSocket.isConnected();
         }
 
         @Override
         public void run() {
-            Log.i(TAG, "BEGIN mConnectThread");
-            setName("ConnectThread");
-            Map<String, Object> bundle = new HashMap<String, Object>();
+            String address = mmDevice.getAddress();
+            Log.i(TAG, "BEGIN ConnectedThread for " + address);
 
             // Always cancel discovery because it will slow down a connection
             mAdapter.cancelDiscovery();
 
             BluetoothSocket tmp = null;
 
-            // try to connect with socket inner method firstly.
-            for(int i=1;i<=3;i++) {
+            // Try to connect with socket inner method firstly
+            for (int i = 1; i <= 3; i++) {
                 try {
-                    tmp = (BluetoothSocket) mmDevice.getClass().getMethod("createRfcommSocket", int.class).invoke(mmDevice, i);
+                    tmp = (BluetoothSocket) mmDevice.getClass()
+                            .getMethod("createRfcommSocket", int.class)
+                            .invoke(mmDevice, i);
                 } catch (Exception e) {
+                    // ignore
                 }
-                if(tmp!=null){
+                if (tmp != null) {
                     mmSocket = tmp;
                     break;
                 }
             }
 
-            // try with given uuid
-            if(mmSocket == null) {
+            // Try with given UUID
+            if (mmSocket == null) {
                 try {
                     tmp = mmDevice.createRfcommSocketToServiceRecord(MY_UUID);
                 } catch (IOException e) {
-                    e.printStackTrace();
                     Log.e(TAG, "create() failed", e);
                 }
                 if (tmp == null) {
-                    Log.e(TAG, "create() failed: Socket NULL.");
-                    connectionFailed();
+                    Log.e(TAG, "create() failed: Socket NULL for " + address);
+                    connectionFailed(address);
                     return;
                 }
+                mmSocket = tmp;
             }
-            mmSocket = tmp;
 
             // Make a connection to the BluetoothSocket
             try {
-                // This is a blocking call and will only return on a
-                // successful connection or an exception
                 mmSocket.connect();
             } catch (Exception e) {
-                e.printStackTrace();
-                connectionFailed();
-                // Close the socket
+                Log.e(TAG, "connect() failed for " + address, e);
+                connectionFailed(address);
                 try {
                     mmSocket.close();
                 } catch (Exception e2) {
@@ -267,52 +404,54 @@ public class BluetoothService {
                 return;
             }
 
-
-            Log.d(TAG, "create ConnectedThread");
+            // Get the BluetoothSocket input and output streams
+            Log.d(TAG, "create ConnectedThread streams for " + address);
             InputStream tmpIn = null;
             OutputStream tmpOut = null;
-
-            // Get the BluetoothSocket input and output streams
             try {
                 tmpIn = mmSocket.getInputStream();
                 tmpOut = mmSocket.getOutputStream();
             } catch (IOException e) {
-                Log.e(TAG, "temp sockets not created", e);
+                Log.e(TAG, "temp sockets not created for " + address, e);
+                connectionFailed(address);
+                return;
             }
 
             mmInStream = tmpIn;
             mmOutStream = tmpOut;
+            mmConnected = true;
 
+            Map<String, Object> bundle = new HashMap<>();
             bundle.put(DEVICE_NAME, mmDevice.getName());
-            bundle.put(DEVICE_ADDRESS,mmDevice.getAddress());
-            setState(STATE_CONNECTED, bundle);
+            bundle.put(DEVICE_ADDRESS, address);
+            infoObservers(STATE_CONNECTED, bundle);
 
-            Log.i(TAG, "Connected");
-            int bytes;
+            Log.i(TAG, "Connected to " + address);
 
             // Keep listening to the InputStream while connected
-            while (true) {
+            while (mmConnected) {
                 try {
                     byte[] buffer = new byte[256];
-                    // Read from the InputStream
-                    bytes = mmInStream.read(buffer);
+                    int bytes = mmInStream.read(buffer);
                     if (bytes > 0) {
-                        // Send the obtained bytes to the UI Activity
-                        bundle = new HashMap<String, Object>();
+                        bundle = new HashMap<>();
                         bundle.put("bytes", bytes);
-                        infoObervers(MESSAGE_READ, bundle);
+                        bundle.put(DEVICE_ADDRESS, address);
+                        infoObservers(MESSAGE_READ, bundle);
                     } else {
-                        Log.e(TAG, "disconnected");
-                        connectionLost();
+                        Log.e(TAG, "disconnected from " + address);
+                        mmConnected = false;
+                        connectionLost(address);
                         break;
                     }
                 } catch (IOException e) {
-                    Log.e(TAG, "disconnected", e);
-                    connectionLost();
+                    Log.e(TAG, "disconnected from " + address, e);
+                    mmConnected = false;
+                    connectionLost(address);
                     break;
                 }
             }
-            Log.i(TAG, "ConnectedThread End");
+            Log.i(TAG, "ConnectedThread End for " + address);
         }
 
         /**
@@ -323,35 +462,32 @@ public class BluetoothService {
         public void write(byte[] buffer) {
             try {
                 mmOutStream.write(buffer);
-                mmOutStream.flush();//清空缓存
-               /* if (buffer.length > 3000) //
-                {
-                  byte[] readata = new byte[1];
-                  SPPReadTimeout(readata, 1, 5000);
-                }*/
-                Log.i("BTPWRITE", new String(buffer, "GBK"));
-                Map<String, Object> bundle = new HashMap<String, Object>();
+                mmOutStream.flush();
+                Log.i("BTPWRITE", "Wrote " + buffer.length + " bytes to " + mmDevice.getAddress());
+                Map<String, Object> bundle = new HashMap<>();
                 bundle.put("bytes", buffer);
-                infoObervers(MESSAGE_WRITE, bundle);
+                bundle.put(DEVICE_ADDRESS, mmDevice.getAddress());
+                infoObservers(MESSAGE_WRITE, bundle);
             } catch (IOException e) {
-                Log.e(TAG, "Exception during write", e);
+                Log.e(TAG, "Exception during write to " + mmDevice.getAddress(), e);
             }
         }
 
-        public BluetoothDevice bluetoothDevice(){
-            if(mmSocket!=null && mmSocket.isConnected()){
+        public BluetoothDevice bluetoothDevice() {
+            if (mmSocket != null && mmSocket.isConnected()) {
                 return mmSocket.getRemoteDevice();
-            }else{
-                return null;
             }
+            return null;
         }
 
         public void cancel() {
+            mmConnected = false;
             try {
-                mmSocket.close();
-                connectionLost();
+                if (mmSocket != null) {
+                    mmSocket.close();
+                }
             } catch (IOException e) {
-                Log.e(TAG, "close() of connect socket failed", e);
+                Log.e(TAG, "close() of connect socket failed for " + mmDevice.getAddress(), e);
             }
         }
     }

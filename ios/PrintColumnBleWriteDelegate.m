@@ -11,7 +11,7 @@
 NSMutableArray<NSMutableString *>  *columns;
 NSInteger maxRowCount;
 
-- (void)didWriteDataToBle:(BOOL)success {NSLog(@"Call back deletgate: %lu",_now+1);
+- (void)didWriteDataToBle:(BOOL)success {NSLog(@"Call back delegate: %lu",_now+1);
     if(_canceled){
            if(_pendingReject) _pendingReject(@"ERROR_IN_PRINT_COLUMN",@"ERROR_IN_PRINT_COLUMN",nil);
         return;
@@ -39,7 +39,7 @@ NSInteger maxRowCount;
 -(void)print{
     [(NSMutableString *)[columns objectAtIndex:_now] appendString:@"\n\r"];//wrap line..
     @try {
-        [self.printer textPrint:[columns objectAtIndex:_now] inEncoding:_encodig withCodePage:_codePage widthTimes:_widthTimes heightTimes:_heightTimes fontType:_fontType delegate:self];
+        [self.printer textPrint:[columns objectAtIndex:_now] inEncoding:_encodig withCodePage:_codePage widthTimes:_widthTimes heightTimes:_heightTimes fontType:_fontType toAddress:_targetAddress delegate:self];
     }
     @catch (NSException *e){
         NSLog(@"ERROR IN PRINTING COLUMN:%@",e);
